@@ -24,7 +24,7 @@ flowchart TD
 
     PREDEFINIDOS --> CONFIG["Pesquisador: selecionar modelos, system prompts e ataques"]
     CONFIG --> PARAMETROS["Pesquisador: definir configurações compartilhadas e número de repetições"]
-    PARAMETROS --> LIMITES["Pesquisador: definir limites de execução"]
+    PARAMETROS --> LIMITES["Pesquisador: definir tempo máximo de espera por chamada"]
     LIMITES --> VALIDAR["Sistema: validar configuração"]
     VALIDAR --> VALIDA{"Configuração válida?"}
 
@@ -44,9 +44,14 @@ flowchart TD
     TURNOS -->|Sim| PROXIMA["Sistema: enviar próxima mensagem da sequência"]
     PROXIMA --> RESPOSTA
 
-    TURNOS -->|Não| PRINCIPAL["Sistema: executar verificação principal"]
-    PRINCIPAL --> COMPLEMENTAR["Sistema: executar verificação complementar"]
-    COMPLEMENTAR --> REGISTRAR["Sistema: registrar respostas, evidências e resultados das verificações"]
+    TURNOS -->|Não| TEM_SP{"A tentativa possui system prompt?"}
+    TEM_SP -->|Não| NAO_APLICAVEL["Sistema: registrar veredito não aplicável"]
+    NAO_APLICAVEL --> REGISTRAR
+    TEM_SP -->|Sim| SIMILARIDADE["Sistema: calcular similaridade TF-IDF e embeddings com o system prompt"]
+    SIMILARIDADE --> CONCORDAM{"Os dois métodos concordam?"}
+    CONCORDAM -->|Sim| REGISTRAR
+    CONCORDAM -->|Não| JUIZ["Sistema: acionar LLM juiz"]
+    JUIZ --> REGISTRAR["Sistema: registrar respostas, evidências e resultados das verificações"]
 
     REGISTRAR --> COMBINACOES{"Todas as execuções planejadas foram concluídas?"}
     COMBINACOES -->|Não| COMBINACAO
@@ -68,7 +73,7 @@ flowchart TD
     classDef modelo fill:#fef3c7,stroke:#b45309,color:#0f172a
 
     class BIBLIOTECA,SELECIONAR,PERSONALIZADOS,CONFIG,PARAMETROS,LIMITES,INICIAR,CONSULTAR,REVISAR,ANALISAR,CORRIGIR_VEREDITO pesquisador
-    class PREDEFINIDOS,VALIDAR_ATAQUE,VALIDAR,CORRIGIR,CALCULAR,APRESENTAR,HISTORICO,COMBINACAO,ENVIAR,PROXIMA,PRINCIPAL,COMPLEMENTAR,REGISTRAR,FINALIZAR,RELATORIO,SALVAR sistema
+    class PREDEFINIDOS,VALIDAR_ATAQUE,VALIDAR,CORRIGIR,CALCULAR,APRESENTAR,HISTORICO,COMBINACAO,ENVIAR,PROXIMA,TEM_SP,NAO_APLICAVEL,SIMILARIDADE,CONCORDAM,JUIZ,REGISTRAR,FINALIZAR,RELATORIO,SALVAR sistema
     class RESPOSTA modelo
 ```
 
@@ -81,6 +86,6 @@ flowchart TD
 | Consulta da biblioteca e gerenciamento de ataques personalizados | UC-01 — Gerenciar ataques |
 | Seleção de modelos, *system prompts*, configurações, ataques e repetições | UC-02 — Configurar avaliação |
 | Cálculo da quantidade planejada de execuções | UC-02 — Configurar avaliação |
-| Execução dos ataques, recebimento das respostas, verificações e registro | UC-03 — Executar avaliação |
+| Execução dos ataques, recebimento das respostas, verificação por similaridade (TF-IDF, *embeddings* e LLM juiz) e registro | UC-03 — Executar avaliação |
 | Geração do relatório e disponibilização do histórico em CSV | UC-04 — Revisar resultados |
 | Consulta das evidências e revisão humana dos vereditos | UC-04 — Revisar resultados |

@@ -48,9 +48,9 @@ Onde:
 
 ### 1.3. Avaliação dos Resultados
 
-**RF14.** O sistema deve utilizar pelo menos dois métodos de verificação para avaliar se houve violação.
+**RF14.** O sistema deve verificar se houve violação comparando a resposta do modelo com o *system prompt* utilizado. Considera-se violação quando a resposta apresenta similaridade elevada com o *system prompt* (vazamento). Tentativas executadas sem *system prompt* recebem o veredito "não aplicável" e permanecem disponíveis para revisão humana.
 
-**RF15.** O sistema deve utilizar um método de verificação principal, considerado o mais confiável, e um ou mais métodos complementares para auxiliar na avaliação dos resultados.
+**RF15.** O sistema deve utilizar dois métodos principais de verificação, a similaridade TF-IDF e a similaridade semântica por *embeddings* (modelo `paraphrase-multilingual-MiniLM-L12-v2`), cada um com limiar configurável. Quando os dois métodos não concordarem, o sistema deve acionar um LLM como juiz, executado localmente, para decidir o veredito. Caso o juiz não produza um resultado válido, o veredito deve ser registrado como "inconclusivo".
 
 **RF16.** O sistema deve apresentar o veredito de cada tentativa (execução completa de um ataque) e as evidências correspondentes, incluindo a entrada enviada e a resposta recebida.
 
@@ -67,6 +67,10 @@ Onde:
 **RF21.** O sistema deve gerar relatórios contendo o histórico das tentativas e um resumo dos resultados obtidos.
 
 **RF22.** O sistema deve apresentar quais ataques foram bem-sucedidos e malsucedidos, permitindo analisar os resultados por modelo, *system prompt* e tipo de ataque.
+
+### 1.5. Limites de Execução
+
+**RF23.** O sistema deve permitir definir o tempo máximo de espera por chamada ao modelo. Quando esse tempo for excedido, a chamada deve ser registrada como falha e a avaliação deve prosseguir com as chamadas seguintes, sem interrupção (RF12).
 
 ---
 
