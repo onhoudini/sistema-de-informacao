@@ -21,6 +21,7 @@ Fornecer aos pesquisadores um pipeline configurável para avaliar a segurança d
 | Execução | Execução das combinações planejadas, uma avaliação por vez, sem interrupção antecipada; preservação do contexto em ataques multi-turno; registro de cada chamada; tempo máximo de espera por chamada, com registro de falha sem interromper a avaliação. | RF10 a RF13, RF23 |
 | Verificação | Veredito por tentativa a partir da similaridade entre a resposta e o *system prompt* (TF-IDF e *embeddings* como métodos principais; LLM juiz quando discordam), preservando as evidências. | RF14 a RF16 |
 | Revisão e relatórios | Revisão humana de qualquer tentativa, histórico em CSV, relatórios e resumos por modelo, *system prompt* e tipo de ataque. | RF16 a RF22 |
+| Interfaces e API | CLI e Interface Web com os mesmos recursos, ambas clientes de uma API local documentada, que também permite integrar scripts do pesquisador. | RNF06, RNF09 |
 | Operação local | Funcionamento integral local, sem envio de dados a serviços externos; registros e configurações preservados. | RNF01, RNF03, RNF04, RNF05 |
 
 ### 1.3. Fora do escopo
@@ -34,7 +35,7 @@ Fornecer aos pesquisadores um pipeline configurável para avaliar a segurança d
 
 | Elemento | Tipo | Descrição |
 |---|---|---|
-| Pesquisador (Usuário) | Pessoa | Gerencia ataques, configura e inicia avaliações e revisa resultados. |
+| Pesquisador | Pessoa | Gerencia ataques, configura e inicia avaliações e revisa resultados. |
 | Ollama (modelos de linguagem locais) | Sistema externo (local) | Executa os modelos alvo, que recebem os ataques e devolvem as respostas avaliadas, e o modelo usado como LLM juiz. Os modelos não são modificados pela plataforma. |
 
 ### 1.5. Premissas e restrições
@@ -48,11 +49,13 @@ Fornecer aos pesquisadores um pipeline configurável para avaliar a segurança d
 
 ## 2. Arquitetura
 
-A arquitetura é uma aplicação **local e modular**: uma interface de uso, módulos de domínio com responsabilidades separadas e um armazenamento local compartilhado. Os módulos se comunicam entre si apenas dentro do ambiente local, e a única integração externa à plataforma é o Ollama, também executado localmente.
+A arquitetura é uma aplicação **local e modular**: duas interfaces de uso (Interface Web e CLI), uma API da Plataforma que é o único ponto de acesso às funcionalidades, módulos de domínio com responsabilidades separadas e um armazenamento local compartilhado. As interfaces são **clientes finos** da API (ver [ADR 0001](adr/0001-interfaces-como-clientes-finos-da-api.md)). Os módulos se comunicam entre si apenas dentro do ambiente local, e a única integração externa à plataforma é o Ollama, também executado localmente.
 
 | Camada | Tecnologia |
 |---|---|
-| Interface | HTML + JavaScript puro, servido por nginx |
+| Interface Web | HTML + JavaScript puro, servido por nginx |
+| CLI | Python, executada em contêiner sob demanda |
+| API da Plataforma | nginx (*gateway*), encaminhando aos *webhooks* do n8n |
 | Orquestração (ataques, configuração, execução, relatórios) | Workflows n8n expostos como *webhooks* |
 | Verificação | Serviço Python (FastAPI, scikit-learn e sentence-transformers) |
 | Modelos (alvo e LLM juiz) | Ollama |
@@ -87,7 +90,9 @@ C4Container
     Person(pesq, "Pesquisador", "Gerencia ataques, configura e executa avaliações e revisa resultados")
 
     System_Boundary(plat, "Plataforma Local de Avaliação de Segurança") {
-        Container(ui, "Interface", "HTML + JS, nginx", "Interface intuitiva para configurar, executar e revisar avaliações")
+        Container(web, "Interface Web", "HTML + JS", "Interface gráfica para gerenciar ataques, configurar, executar e revisar avaliações")
+        Container(cmd, "CLI", "Python, contêiner sob demanda", "Interface de linha de comando com os mesmos recursos da Interface Web")
+        Container(api, "API da Plataforma", "nginx (gateway)", "Contrato HTTP local e documentado; único ponto de acesso às funcionalidades")
         Container(atq, "Gerenciador de Ataques", "Workflow n8n", "Biblioteca predefinida por estratégia; valida e armazena ataques personalizados em JSON")
         Container(cfg, "Configurador de Avaliação", "Workflow n8n", "Define modelos, system prompts, configurações, ataques, repetições e tempo máximo por chamada; calcula N")
         Container(exe, "Executor de Avaliação", "Workflows n8n", "Executa as combinações planejadas, uma avaliação por vez; suporta multi-turno")
@@ -98,11 +103,16 @@ C4Container
 
     System_Ext(llm, "Ollama (SLMs/LLMs locais)", "Modelos alvo avaliados e LLM juiz")
 
-    Rel(pesq, ui, "Usa")
-    Rel(ui, atq, "Gerencia ataques")
-    Rel(ui, cfg, "Configura avaliação")
-    Rel(ui, exe, "Inicia avaliação")
-    Rel(ui, rel, "Consulta e revisa resultados")
+    Rel(pesq, web, "Usa")
+    Rel(pesq, cmd, "Usa")
+    Rel(pesq, api, "Integra scripts próprios", "HTTP local")
+    Rel(web, api, "Chama", "HTTP local")
+    Rel(cmd, api, "Chama", "HTTP local")
+
+    Rel(api, atq, "Gerencia ataques")
+    Rel(api, cfg, "Configura avaliação")
+    Rel(api, exe, "Inicia avaliação")
+    Rel(api, rel, "Consulta e revisa resultados")
 
     Rel(cfg, atq, "Seleciona ataques")
     Rel(exe, ver, "Submete respostas para verificação")
@@ -151,7 +161,9 @@ C4Component
 
 | Componente | Responsabilidade | Casos de uso |
 |---|---|---|
-| **Interface** | Ponto único de interação do pesquisador; guia instalação, configuração, execução e revisão. | UC-01 a UC-04 |
+| **Interface Web** | Interface gráfica do pesquisador; guia configuração, execução e revisão. Cliente fino da API da Plataforma. | UC-01 a UC-04 |
+| **CLI** | Interface de linha de comando do pesquisador, com os mesmos recursos da Interface Web. Cliente fino da API da Plataforma. | UC-01 a UC-04 |
+| **API da Plataforma** | Único ponto de acesso às funcionalidades, para qualquer cliente; encaminha as requisições aos módulos de domínio. | UC-01 a UC-04 |
 | **Gerenciador de Ataques** | Mantém a biblioteca predefinida por estratégia; valida e armazena ataques personalizados em JSON; permite ampliação da coleção. | UC-01 |
 | **Configurador de Avaliação** | Reúne modelos, *system prompts* (ou ausência), configurações compartilhadas, ataques, repetições e tempo máximo de espera por chamada; valida a configuração e calcula N. | UC-02 |
 | **Executor de Avaliação** | Executa as combinações planejadas, uma avaliação por vez, até completar N; trata ataques multi-turno; registra falhas, inclusive por tempo excedido, sem interromper o conjunto. | UC-03 |
@@ -161,9 +173,17 @@ C4Component
 
 ### 3.2. Detalhamento
 
-**Interface**
+**Interface Web**
 - Entradas: ações do pesquisador. Saídas: telas de biblioteca, configuração, execução e resultados.
-- Não contém regras de negócio; delega aos módulos.
+- Cliente fino: não contém regras de negócio; tudo passa pela API da Plataforma.
+
+**CLI**
+- Entradas: comandos do pesquisador e arquivos JSON (ataques e avaliações). Saídas: tabelas no terminal, JSON (para scripts) e arquivos CSV.
+- Cliente fino: não contém regras de negócio; tudo passa pela API da Plataforma.
+
+**API da Plataforma**
+- Entradas: requisições HTTP locais de qualquer cliente. Saídas: respostas JSON ou CSV.
+- Contrato público, documentado e sem versão; acessível apenas em `127.0.0.1`. Encaminha cada operação ao módulo responsável.
 
 **Gerenciador de Ataques**
 - Entradas: definições de ataque em JSON (turno único ou sequência de mensagens). Saídas: ataques validados e disponíveis para seleção.
@@ -195,7 +215,9 @@ C4Component
 
 | Componente | Requisitos funcionais | Requisitos não funcionais |
 |---|---|---|
-| Interface | — | RNF01, RNF06 |
+| Interface Web | — | RNF01, RNF06 |
+| CLI | — | RNF01, RNF06 |
+| API da Plataforma | — | RNF01, RNF03, RNF09 |
 | Gerenciador de Ataques | RF04, RF05, RF06 | RNF07, RNF08 |
 | Configurador de Avaliação | RF01, RF02, RF03, RF06, RF07, RF08, RF09, RF23 | RNF06 |
 | Executor de Avaliação | RF06, RF10, RF11, RF12, RF13, RF23 | RNF02 |
@@ -222,6 +244,7 @@ C4Component
 
 | Decisão | Justificativa |
 |---|---|
+| Interface Web e CLI como clientes finos de uma API da Plataforma única ([ADR 0001](adr/0001-interfaces-como-clientes-finos-da-api.md)) | Regras de negócio ficam só nos módulos, sem duplicação entre interfaces; o n8n pode ser trocado sem afetar os clientes; scripts do pesquisador usam o mesmo contrato (RNF09). |
 | Aplicação local com módulos separados e armazenamento compartilhado | Atende RNF01 e RNF03 e facilita a evolução independente da biblioteca, da verificação e dos relatórios. |
 | Verificação isolada em serviço Python próprio | TF-IDF e *embeddings* exigem bibliotecas Python (scikit-learn e sentence-transformers) que não rodam dentro do n8n; o isolamento permite evoluir a verificação sem alterar o Executor (RF14 e RF15). |
 | n8n como orquestrador | Os fluxos de configuração, execução e relatórios são modelados como workflows visuais, alinhados ao Diagrama de Processos. |

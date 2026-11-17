@@ -97,13 +97,15 @@ Onde:
 
 ### 2.5. Usabilidade
 
-**RNF06.** A interface deve ser intuitiva e facilitar a instalação, configuração e execução das avaliações.
+**RNF06.** As interfaces da plataforma, de linha de comando e web, devem ser intuitivas e facilitar a instalação, a configuração e a execução das avaliações.
 
 **RNF07.** A definição de ataques personalizados deve utilizar um formato estruturado e de fácil edição, como JSON, facilitando sua criação, organização, armazenamento e reutilização.
 
 ### 2.6. Manutenibilidade e Extensibilidade
 
 **RNF08.** A coleção de ataques disponibilizada pelo sistema deve permitir ampliação e manutenção, possibilitando a inclusão de novas estratégias de *prompt injection*.
+
+**RNF09.** A plataforma deve expor todas as suas funcionalidades por uma API local documentada, permitindo que outros clientes sejam integrados sem alterar os módulos de domínio.
 
 ---
 
