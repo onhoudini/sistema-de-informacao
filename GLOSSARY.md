@@ -44,19 +44,18 @@ Tentativa cujo veredito final é violação.
 
 **API da Plataforma**:
 Contrato público, local e documentado pelo qual qualquer cliente acessa todas as funcionalidades da plataforma.
-_Evitar_: webhooks, back-end
+_Nomenclaturas a evitar_: webhooks, back-end
 
 **Interface Web**:
 Cliente fino gráfico da API da Plataforma, usado pelo navegador.
-_Evitar_: Interface (sem qualificador), front-end, GUI
+_Nomenclaturas a evitar_: Interface (sem qualificador), front-end, GUI
 
 **Interface de Linha de Comando (CLI)**:
 Cliente fino de terminal da API da Plataforma.
-_Evitar_: Interface (sem qualificador)
+_Nomenclaturas a evitar_: Interface (sem qualificador)
 
 **Cliente**:
 Qualquer consumidor da API da Plataforma: a Interface Web, a CLI ou um script do pesquisador.
 
 **Cliente fino**:
-Cliente que apenas coleta a entrada, chama a API da Plataforma e apresenta a resposta, sem regras de negócio e sem acesso direto aos dados ou aos modelos.
-_Evitar_: thin client
+Cliente que apenas coleta a entrada, chama a API da Plataforma e apresenta a resposta, sem regras de negócio e sem acesso direto aos dados ou aos modelos. Um *thin client*.
