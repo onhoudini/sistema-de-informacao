@@ -17,6 +17,7 @@ Trabalho da disciplina de Sistemas de Informação: **Plataforma Local de Avalia
    - Telemetria do n8n desligada (variáveis na seção 2.1 do spec). Não remova essas variáveis.
    - Modelos são baixados só na instalação (`docker build` do verificador, `ollama pull`). Nunca em tempo de execução.
    - Portas publicadas sempre em `127.0.0.1`.
+   - **Versões sempre fixadas** (spec §2.2): nada de `latest` nem tags flutuantes em imagens, `FROM`, pacotes ou modelos. Pacotes Python novos ou atualizados exigem regenerar o `constraints.txt` da imagem.
 2. **Resultados originais são imutáveis** (RN-13). Nunca faça `UPDATE`/`DELETE` em `verificacao`. Revisão humana é sempre `INSERT` em `revisao`.
 3. **Uma avaliação por vez** (RF11). O índice único parcial em `avaliacao` garante isso; não o contorne.
 4. **Sem interrupção antecipada** (RF12). Falha ou *timeout* numa tentativa vira `falha`, e o loop continua.
@@ -53,10 +54,15 @@ docker compose up -d
 # baixar modelos (contêiner) — no host: ollama pull <modelo>
 docker compose exec ollama ollama pull llama3.2:3b
 
-# exportar / importar workflows do n8n
+# primeiro uso / após mudar workflows: credencial "plataforma" (do .env), importar, ativar e reiniciar o n8n
+./scripts/configurar-n8n.ps1            # PowerShell
+bash scripts/configurar-n8n.sh          # bash
+
+# exportar / importar workflows do n8n (arquivos n8n/workflows/<id>.json)
 docker compose exec n8n n8n export:workflow --all --separate --output=/workflows
 docker compose exec n8n n8n import:workflow --separate --input=/workflows
-#   (/workflows = volume montado de ./n8n/workflows)
+#   (/workflows = volume montado de ./n8n/workflows; no Git Bash use MSYS_NO_PATHCONV=1)
+#   ativação pela CLI do n8n só vale após `docker compose restart n8n`
 
 # CLI (contêiner sob demanda; caminhos relativos à raiz, CSV em saida/)
 ./plataforma.ps1 avaliacoes listar      # PowerShell
@@ -79,4 +85,7 @@ Endereços locais: Interface Web `http://127.0.0.1:8080`, API da Plataforma `htt
 
 - Windows 11 + Docker Desktop (backend WSL2). Use caminhos com `/` em scripts e arquivos do Compose.
 - GPU: o jeito mais simples é rodar o Ollama nativo no Windows e apontar `OLLAMA_BASE_URL` para `host.docker.internal`. O Ollama em contêiner com GPU NVIDIA exige suporte a GPU no WSL2.
-- Primeiro uso do n8n: criar a conta de proprietário local e a credencial Postgres `plataforma` (host `postgres`, database `plataforma`, usuário `plataforma_app`). Depois, importar e ativar os workflows.
+- Primeiro uso do n8n: `scripts/configurar-n8n` cria a credencial Postgres `plataforma` (ID `plataformaPg0001`, host `postgres`, database `plataforma`, usuário `plataforma_app`), importa e ativa os workflows. A conta de proprietário local é criada no editor, só se for editar workflows.
+- Se a porta 5678 estiver ocupada, defina `N8N_EDITOR_PORT` no `.env`.
+- O gateway reescreve rotas com `:id` para webhooks estáticos `plataforma/...?id=` (spec §5.2); não use parâmetros de caminho nos webhooks.
+- Nos workflows, laços leem dados de nós anteriores com `$('Nome').first()`, nunca `$json` (na volta do laço, `$json` é a saída do último nó).

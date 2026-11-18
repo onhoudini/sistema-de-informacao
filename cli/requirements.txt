@@ -1,0 +1,6 @@
+# Dependências diretas. Todas as versões, inclusive transitivas, estão travadas em constraints.txt.
+typer==0.15.1
+click==8.1.8
+httpx==0.28.1
+typing_extensions==4.12.2
+pytest==8.3.4

@@ -1,0 +1,20 @@
+# Gerado com: docker run --rm --entrypoint pip <imagem> freeze  (versões exatas testadas)
+# Ao atualizar uma dependência em requirements.txt, reconstrua a imagem, rode os testes e regenere este arquivo.
+anyio==4.14.2
+certifi==2026.10.23
+click==8.1.8
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+iniconfig==2.3.1
+markdown-it-py==4.3.0
+mdurl==0.1.2
+packaging==26.3
+pluggy==1.7.0
+Pygments==2.21.0
+pytest==8.3.4
+rich==15.0.0
+shellingham==1.5.4
+typer==0.15.1
+typing_extensions==4.12.2

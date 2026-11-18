@@ -12,6 +12,43 @@ Trabalho da disciplina de Sistemas de Informação. Neste trabalho, será aplica
 
 **Stack:** n8n (orquestração), Ollama (modelos), PostgreSQL (armazenamento), serviço Python de verificação, CLI em Python e Interface Web em HTML + JS, tudo em Docker Compose no ambiente local.
 
+> **Uso autorizado (RE01):** a ferramenta tem natureza ofensiva e deve ser usada exclusivamente em avaliações autorizadas.
+
+## Como executar
+
+Pré-requisitos: Docker Desktop (WSL2) e Ollama (recomendado instalado no Windows, para usar a GPU).
+
+```powershell
+# 1. Modelos (alvo e juiz), baixados só na instalação
+#    IDs testados (confira com `ollama list`): llama3.2:1b = baf6a787fdff, qwen2.5:3b = 357c53fb659c
+ollama pull llama3.2:1b
+ollama pull qwen2.5:3b
+
+# 2. Configuração: copie e preencha senhas e a chave do n8n
+copy .env.example .env
+
+# 3. Subir o ambiente (o primeiro build baixa o modelo de embeddings)
+docker compose up -d --build
+
+# 4. Configurar o n8n: credencial, importação e ativação dos workflows
+./scripts/configurar-n8n.ps1
+```
+
+- Interface Web: http://127.0.0.1:8080
+- API da Plataforma: http://127.0.0.1:8080/api ([spec §5](spec.md))
+- CLI: `./plataforma.ps1 --help` (ou `./plataforma.sh`); exemplo de avaliação em [exemplos/avaliacao-exemplo.json](exemplos/avaliacao-exemplo.json):
+
+```powershell
+./plataforma.ps1 modelos listar
+./plataforma.ps1 avaliacoes validar exemplos/avaliacao-exemplo.json
+./plataforma.ps1 avaliacoes criar exemplos/avaliacao-exemplo.json
+./plataforma.ps1 avaliacoes executar 1
+./plataforma.ps1 resultados resumo 1
+./plataforma.ps1 resultados csv 1        # grava saida/avaliacao-1.csv
+```
+
+Testes: `docker compose run --rm verificador pytest` e `docker compose --profile cli run --rm --entrypoint pytest cli`. Calibração dos limiares (F8): `python verificador/calibracao.py saida/avaliacao-1.csv`.
+
 ## Documentação
 
 | Documento | Conteúdo |

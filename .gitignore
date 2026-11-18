@@ -1,2 +1,9 @@
 # Roteiro pessoal temporário
 TAREFAS.md
+.env
+saida/*
+!saida/.gitkeep
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/

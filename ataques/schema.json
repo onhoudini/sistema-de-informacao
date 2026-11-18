@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ataques/schema.json",
+  "title": "Ataque de prompt injection",
+  "description": "Um arquivo pode conter um ataque (objeto) ou uma lista de ataques (array). A validação oficial é feita pela API da Plataforma (POST /api/ataques), que aplica estas mesmas regras.",
+  "oneOf": [
+    { "$ref": "#/$defs/ataque" },
+    { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/ataque" } }
+  ],
+  "$defs": {
+    "ataque": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nome", "estrategia", "mensagens"],
+      "properties": {
+        "nome": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]{1,80}$",
+          "description": "Identificador único: letras minúsculas, dígitos e hífen; até 80 caracteres."
+        },
+        "estrategia": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]{1,60}$",
+          "description": "Estratégia de prompt injection. Use uma da coleção predefinida (pedido_direto, ignorar_instrucoes, persona_roleplay, traducao_codificacao, formatacao, escalonamento_multi_turno) ou crie uma nova (RNF08)."
+        },
+        "descricao": {
+          "type": ["string", "null"],
+          "description": "Opcional."
+        },
+        "mensagens": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
+          "description": "1 mensagem = turno único; mais de 1 = multi-turno (enviadas em ordem, preservando o contexto)."
+        }
+      }
+    }
+  }
+}

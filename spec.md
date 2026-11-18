@@ -44,11 +44,11 @@ A Solicitação de Sistema recomenda revisão humana por amostragem. O sistema p
 
 | Serviço | Imagem | Porta no host | Papel |
 |---|---|---|---|
-| `postgres` | `postgres:16` | `127.0.0.1:5432` (opcional) | Databases `n8n` (interno do n8n) e `plataforma` (dados da aplicação). |
-| `n8n` | `n8nio/n8n:<versão fixada>` | `127.0.0.1:5678` | Editor (porta padrão do n8n) e webhooks que implementam a API. Orquestra ataques, configuração, execução e relatórios. |
+| `postgres` | `postgres:16.16` | não exposto (`docker compose exec postgres psql`) | Databases `n8n` (interno do n8n) e `plataforma` (dados da aplicação). |
+| `n8n` | `n8nio/n8n:1.123.98` | `127.0.0.1:5678` (`N8N_EDITOR_PORT`) | Editor e webhooks que implementam a API. Orquestra ataques, configuração, execução e relatórios. |
 | `verificador` | build local (`verificador/`) | não exposto | Serviço Python de verificação (TF-IDF, *embeddings*, LLM juiz). |
-| `ollama` | `ollama/ollama:<versão fixada>` | `127.0.0.1:11434` | Modelos alvo e LLM juiz. Perfil `ollama` do Compose; pode ser substituído pelo Ollama instalado no host. |
-| `gateway` | `nginx:<versão fixada>` | `127.0.0.1:8080` | API da Plataforma: faz proxy de `/api/` para `http://n8n:5678/webhook/`. Também serve a Interface Web (`frontend/`). |
+| `ollama` | `ollama/ollama:0.40.16` | `127.0.0.1:11434` | Modelos alvo e LLM juiz. Perfil `ollama` do Compose; pode ser substituído pelo Ollama instalado no host. |
+| `gateway` | `nginx:1.31.9-alpine` | `127.0.0.1:8080` | API da Plataforma: encaminha cada rota de `/api/` a um webhook de produção do n8n (`/webhook/plataforma/...`, tabela em 5.2). Também serve a Interface Web (`frontend/`). |
 | `cli` | build local (`cli/`) | não exposto | CLI (seção 8.1). Perfil `cli`; executada sob demanda com `docker compose run`, nunca fica no ar. |
 
 - Todas as portas publicadas ficam presas a `127.0.0.1`.
@@ -66,15 +66,29 @@ A Solicitação de Sistema recomenda revisão humana por amostragem. O sistema p
 | Modelos Ollama | Baixados com `ollama pull` na instalação. |
 | Interface Web | Sem CDN, fontes externas ou analytics. Toda biblioteca, se houver, fica vendorizada em `frontend/vendor/`. |
 | CLI | Dependências instaladas no `docker build`. O contêiner `cli` fica só na rede Docker `internal: true` (sem saída para a internet), da qual o `gateway` também participa. |
-| Rede (reforço opcional) | `postgres` e `verificador` também só na rede `internal: true`. |
+| Rede | `postgres` fica só na rede `interna` (`internal: true`). `n8n`, `verificador` e `gateway` também estão na rede `externa`, necessária para alcançar o Ollama no host (`host.docker.internal`) e para publicar portas. |
 
 Downloads de software e modelos acontecem só na instalação. Nenhum dado de avaliação (*system prompts*, ataques, respostas, resultados) sai do ambiente local.
+
+### 2.2. Versões fixadas
+
+Nenhuma dependência usa `latest` ou tag flutuante, para que a instalação seja reproduzível:
+
+| Item | Versão |
+|---|---|
+| Imagens dos serviços | `n8nio/n8n:1.123.98`, `postgres:16.16`, `nginx:1.31.9-alpine`, `ollama/ollama:0.40.16` (no `.env` e como padrão no `docker-compose.yml`) |
+| Imagem base do `verificador` e da `cli` | `python:3.12.16-slim-trixie` |
+| Pacotes Python | dependências diretas em `requirements.txt`; **todas**, inclusive transitivas, travadas em `constraints.txt` (`pip install -r requirements.txt -c constraints.txt`). `torch==2.5.1+cpu`. |
+| Modelo de *embeddings* | `paraphrase-multilingual-MiniLM-L12-v2` na revisão `e8f8c211226b894fcb81acc59f3b34ba3efd5f42` (`REVISAO_MODELO` em `verificador/app/similaridade.py` e `ARG` no Dockerfile) |
+| Modelos do Ollama testados | `llama3.2:1b` (ID `baf6a787fdff`), `qwen2.5:1.5b` (`65ec06548149`), `qwen2.5:3b` (juiz, `357c53fb659c`); conferir com `ollama list` |
+
+Para atualizar um pacote Python: mudar `requirements.txt`, reconstruir a imagem, rodar os testes e regenerar `constraints.txt` com `docker run --rm --entrypoint pip <imagem> freeze`.
 
 ---
 
 ## 3. Modelo de Dados (database `plataforma`)
 
-Script em `db/init/02-schema.sql`, executado pelo `docker-entrypoint-initdb.d` do Postgres (o `01-databases.sql` cria os databases `n8n` e `plataforma`).
+Scripts em `db/init/`, executados em ordem pelo `docker-entrypoint-initdb.d` do Postgres na primeira inicialização do volume: `01-databases.sh` (databases `n8n` e `plataforma` e seus usuários, com senhas do `.env`), `02-schema.sql` (tabelas, view, *triggers* e funções de acesso), `03-seed-ataques.sql` (coleção predefinida) e `04-permissoes.sh` (permissões de `plataforma_app`).
 
 ```sql
 CREATE TABLE ataque (
@@ -121,6 +135,7 @@ CREATE TABLE avaliacao_system_prompt (                                          
 CREATE TABLE avaliacao_ataque (                                                 -- (A)
   avaliacao_id  INT NOT NULL REFERENCES avaliacao(id),
   ataque_id     INT NOT NULL REFERENCES ataque(id),
+  ordem         INT NOT NULL,                  -- ordem informada na configuração
   snapshot      JSONB NOT NULL,                -- cópia do ataque no momento da configuração
   PRIMARY KEY (avaliacao_id, ataque_id)
 );
@@ -177,8 +192,9 @@ CREATE TABLE revisao (                         -- append-only (RF17, RN-12, RN-1
 );
 ```
 
-- A view `v_resultado` junta tentativa, ataque, *system prompt*, verificação e a revisão mais recente, e expõe `veredito_final`. Relatórios e CSV leem dessa view.
-- `verificacao` e `revisao` não recebem `UPDATE` nem `DELETE` pela aplicação. Um *trigger* que bloqueia `UPDATE`/`DELETE` nessas tabelas é recomendado.
+- A view `v_resultado` junta tentativa, ataque (do *snapshot*), *system prompt*, verificação e a revisão mais recente, e expõe `veredito_final` e `situacao` (veredito final ou, sem veredito, o status `falha`/`pendente`, usada nos agregados e no filtro de tentativas). Relatórios e CSV leem dessa view.
+- `verificacao` e `revisao` não recebem `UPDATE`, `DELETE` nem `TRUNCATE`: *triggers* bloqueiam, e `plataforma_app` só tem `SELECT` e `INSERT` nelas.
+- **Funções de acesso.** Os nós Postgres dos workflows chamam funções `api_*` (em `02-schema.sql`) que recebem e devolvem `jsonb` e sempre retornam uma linha, para que cada nó produza exatamente um item. Textos chegam do n8n codificados em base64 (`convert_from(decode('...','base64'),'UTF8')::jsonb`), o que evita injeção de SQL e problemas com vírgulas nos parâmetros. Principais: `api_criar_avaliacao`, `api_iniciar_execucao`, `api_proxima_tentativa`, `api_proximo_passo`, `api_registrar_turno`/`_falha`/`_verificacao`, `api_resumo`, `api_tentativas`, `api_linhas_csv`, `api_tentativa`, `api_registrar_revisao`.
 - O usuário de banco da aplicação (`plataforma_app`) só tem acesso ao database `plataforma`.
 
 ---
@@ -213,21 +229,23 @@ JSON Schema em `ataques/schema.json`. Um arquivo pode conter um ataque ou uma li
 
 Contrato público, local e **sem versão**. Todos os clientes (CLI, Interface Web e scripts do pesquisador) usam estas rotas, e nenhuma regra de negócio fica nos clientes ([ADR 0001](docs/adr/0001-interfaces-como-clientes-finos-da-api.md)). Uma mudança incompatível exige atualizar este spec e os dois clientes na mesma entrega.
 
-Base: `http://127.0.0.1:8080/api` no host, `http://gateway/api` dentro do Compose (`gateway` → `http://n8n:5678/webhook/`). Os workflows precisam estar **ativos** para os webhooks de produção responderem. Respostas são JSON, exceto o CSV. Sem autenticação: o acesso é restrito a `127.0.0.1`.
+Base: `http://127.0.0.1:8080/api` no host, `http://gateway/api` dentro do Compose (`gateway` → webhooks do n8n, seção 5.2). Os workflows precisam estar **ativos** para os webhooks de produção responderem. Respostas são JSON, exceto o CSV. Sem autenticação: o acesso é restrito a `127.0.0.1`.
+
+Convenções: corpos de `POST` exigem `Content-Type: application/json`; erros de validação vêm como `{erros: [...]}` e erros simples como `{erro: "..."}`, sempre em PT-BR; IDs inexistentes devolvem `404`; se o n8n estiver fora do ar, o `gateway` devolve `503 {erro}`; rotas desconhecidas devolvem `404 {erro}`.
 
 | Método e rota | Workflow | Descrição | Requisitos |
 |---|---|---|---|
 | `GET /ataques` | `ataques` | Lista ataques (filtro opcional `?estrategia=`). | RF04, UC-01 |
-| `POST /ataques` | `ataques` | Valida contra o schema e grava ataques personalizados. `400 {erros:[...]}` se inválido. | RF05, RF06, UC-01 |
-| `GET /modelos` | `modelos` | Lista modelos disponíveis (`GET {OLLAMA_BASE_URL}/api/tags`). | RF01 |
+| `POST /ataques` | `ataques` | Valida contra o schema (inclusive nome já existente ou repetido no arquivo) e grava ataques personalizados: `201 {inseridos:[...]}`. `400 {erros:[...]}` se inválido. | RF05, RF06, UC-01 |
+| `GET /modelos` | `modelos` (`PlatModelos00001`) | Lista modelos disponíveis (`GET {OLLAMA_BASE_URL}/api/tags`): `[{nome, familia, parametros, quantizacao, tamanho_bytes, modificado_em}]`; `503` se o Ollama não responder. | RF01 |
 | `POST /avaliacoes/validar` | `avaliacoes` | Valida o corpo do §5.1 **sem gravar**. Sempre `200 {n_planejado, erros:[...], avisos:[...]}`; `n_planejado` é `null` se as listas não permitirem o cálculo. | RF09, RN-03–RN-06, UC-02 |
 | `POST /avaliacoes` | `avaliacoes` | Mesma validação de `/validar`; se válida, grava com status `configurada` e devolve `201 {id, n_planejado, avisos}`. `400 {erros, avisos}` se inválida. | RF01–RF03, RF07–RF09, RF23, UC-02 |
 | `GET /avaliacoes` | `avaliacoes` | Lista avaliações com status e progresso. | UC-04 |
 | `GET /avaliacoes/:id` | `avaliacoes` | Configuração completa e progresso (`n_planejado`, `concluidas`, `falhas`, `pendentes`). | UC-02, UC-03 |
-| `POST /avaliacoes/:id/executar` | `executar-avaliacao` | Inicia a execução. `202` imediato; `409` se já houver outra em execução. | RF10–RF12, UC-03 |
+| `POST /avaliacoes/:id/executar` | `executar-avaliacao` | Inicia a execução. `202` imediato; `409` se já houver outra em execução ou se a avaliação não estiver `configurada`; `404` se não existir. | RF10–RF12, UC-03 |
 | `GET /avaliacoes/:id/resumo` | `resultados` | Agregados por modelo, *system prompt* e estratégia. | RF21, RF22 |
-| `GET /avaliacoes/:id/tentativas` | `resultados` | Lista paginada de tentativas com veredito final (`?veredito=&pagina=`). | RF16, RF19 |
-| `GET /avaliacoes/:id/csv` | `resultados` | Histórico em CSV (`text/csv`, UTF-8 com BOM). | RF20 |
+| `GET /avaliacoes/:id/tentativas` | `resultados` | Lista paginada (50 por página) de tentativas com veredito final (`?veredito=&pagina=`; `veredito` aceita os quatro vereditos, `falha` e `pendente`). | RF16, RF19 |
+| `GET /avaliacoes/:id/csv` | `resultados` | Histórico em CSV (`text/csv`, UTF-8 com BOM). `?separador=;` gera ponto e vírgula, que o Excel em português abre direto. | RF20 |
 | `GET /tentativas/:id` | `resultados` | Detalhe: turnos (entradas e respostas), verificação e revisões. | RF16, RF17 |
 | `POST /tentativas/:id/revisao` | `resultados` | Registra revisão humana `{veredito, comentario}`. | RF17, RF18, RN-13 |
 
@@ -254,36 +272,51 @@ Base: `http://127.0.0.1:8080/api` no host, `http://gateway/api` dentro do Compos
 }
 ```
 
-**Validações** (RN-03 a RN-06): listas não vazias; modelos e `modelo_juiz` existentes em `/api/tags`; ataques existentes; `repeticoes ≥ 1`; `timeout_chamada_s > 0`; limiares em (0, 1]. Se o `modelo_juiz` também estiver entre os modelos avaliados, o sistema emite um **aviso**, não um erro. A mesma rotina de validação atende `POST /avaliacoes/validar` e `POST /avaliacoes`; os clientes não reimplementam nenhuma dessas regras.
+**Validações** (RN-03 a RN-06): listas não vazias e sem repetições; modelos e `modelo_juiz` existentes em `/api/tags` (um nome sem *tag* aceita `:latest`); ataques existentes; rótulos de *system prompt* únicos e no máximo uma condição "sem *system prompt*"; parâmetros de configuração restritos às `options` do Ollama, com tipos corretos; `repeticoes ≥ 1`; `timeout_chamada_s > 0`; limiares em (0, 1]; campos desconhecidos são erro. `timeout_chamada_s`, `limiar_tfidf` e `limiar_embedding` são opcionais, com padrões 120, 0,6 e 0,8 aplicados pela API. São **avisos**, não erros: `modelo_juiz` entre os modelos avaliados, configuração sem `seed`, configurações idênticas e presença da condição "sem *system prompt*". A mesma rotina de validação atende `POST /avaliacoes/validar` e `POST /avaliacoes`; os clientes não reimplementam nenhuma dessas regras.
 
 **Cálculo de N** (RF09): `N = |M| × |S| × |C| × |A| × |R|`, com a condição "sem *system prompt*" contada em S. No exemplo, N = 2 × 2 × 2 × 3 × 3 = 72.
+
+### 5.2. Roteamento no `gateway`
+
+O n8n registra webhooks com parâmetro de caminho (`:id`) prefixados pelo ID do nó, o que deixaria a URL dependente do n8n. Por isso todos os webhooks são **estáticos**, sob `plataforma/`, e o `gateway` (`frontend/nginx.conf`) reescreve as rotas com ID, passando-o como `?id=` (a query string original é preservada):
+
+| Rota pública | Webhook do n8n |
+|---|---|
+| `/api/ataques`, `/api/modelos`, `/api/avaliacoes` | `/webhook/plataforma/ataques`, `.../modelos`, `.../avaliacoes` |
+| `/api/avaliacoes/validar` | `/webhook/plataforma/avaliacoes-validar` |
+| `/api/avaliacoes/:id` | `/webhook/plataforma/avaliacao?id=:id` |
+| `/api/avaliacoes/:id/{executar,resumo,tentativas,csv}` | `/webhook/plataforma/avaliacao-{executar,resumo,tentativas,csv}?id=:id` |
+| `/api/tentativas/:id` | `/webhook/plataforma/tentativa?id=:id` |
+| `/api/tentativas/:id/revisao` | `/webhook/plataforma/tentativa-revisao?id=:id` |
 
 ---
 
 ## 6. Workflows n8n
 
-Exportados em `n8n/workflows/<nome>.json`. Credencial Postgres única (`plataforma`), criada manualmente no primeiro uso e nunca versionada.
+Exportados em `n8n/workflows/<id>.json` (nome de arquivo padrão do `n8n export:workflow --separate`). Credencial Postgres única (`plataforma`, ID `plataformaPg0001`), nunca versionada: criada por `scripts/configurar-n8n.{sh,ps1}` a partir do `.env` (ou manualmente no editor, com esse nome). O mesmo script importa e ativa os workflows.
 
-| Workflow | Fluxo |
+Nós usados: Webhook, Respond to Webhook, Code, IF, Postgres, HTTP Request e Execute Workflow. Os laços são feitos ligando a saída de um nó a um nó anterior (o n8n os executa em sequência), com o estado sempre no banco.
+
+| Workflow (ID) | Fluxo |
 |---|---|
-| `ataques` | Webhook → Code (valida schema) → Postgres (`INSERT ... ON CONFLICT (nome) DO NOTHING`) → Respond. |
-| `modelos` | Webhook → HTTP Request (`/api/tags`) → Respond. |
-| `avaliacoes` | Webhook → Code (valida e calcula N; rotina única) → em `/validar`: Respond `{n_planejado, erros, avisos}` → na criação, se válida: Postgres (`INSERT` em `avaliacao`, `avaliacao_system_prompt`, `avaliacao_ataque` com *snapshot*) → Respond. |
-| `executar-avaliacao` | Webhook → Postgres: `UPDATE avaliacao SET status='em_execucao', iniciado_em=now() WHERE id=$1 AND status='configurada'`. Violação do índice único → `409`. Depois: Respond `202` → Code (gera as N combinações e insere `tentativa` com `pendente`, apenas se a avaliação ainda não tiver tentativas) → Postgres (seleciona as tentativas `pendente`) → Loop Over Items (uma por vez) → Execute Workflow `executar-tentativa` → ao final, `status='finalizada'`, `finalizado_em=now()`. |
-| `executar-tentativa` | Ver 6.1. |
-| `resultados` | Webhooks de leitura sobre `v_resultado`, geração do CSV e `INSERT` em `revisao`. |
+| `ataques` (`PlatAtaques00001`) | GET: Webhook → Postgres (`api_listar_ataques`) → Respond. POST: Webhook → Postgres (nomes existentes) → Code (valida schema) → IF → Postgres (`INSERT ... ON CONFLICT (nome) DO NOTHING`) → Respond. |
+| `modelos` (`PlatModelos00001`) | Webhook → HTTP Request (`/api/tags`) → Respond. |
+| `avaliacoes` (`PlatAvaliacoes01`) | Webhook → HTTP Request (`/api/tags`) → Postgres (ids de ataques) → Code (valida e calcula N; rotina única) → em `/validar`: Respond `{n_planejado, erros, avisos}` → na criação, se válida: Postgres (`INSERT` em `avaliacao`, `avaliacao_system_prompt`, `avaliacao_ataque` com *snapshot*) → Respond. |
+| `executar-avaliacao` (`PlatExecAvaliac1`) | Webhook → Postgres `api_iniciar_execucao`: numa transação, `UPDATE avaliacao SET status='em_execucao' ... WHERE status='configurada'` (violação do índice único → `409`) e geração das N tentativas `pendente` (só se ainda não existirem) → Respond `202` → laço: Postgres `api_proxima_tentativa` (marca `iniciado_em`) → IF há pendente → Execute Workflow `executar-tentativa` (erros do sub-workflow não param o laço) → de volta à próxima; sem pendentes → `status='finalizada'`, `finalizado_em=now()`. Uma tentativa `pendente` com `iniciado_em` preenchido indica execução interrompida e vira `falha` (RF12). |
+| `executar-tentativa` (`PlatExecTentati1`) | Sub-workflow; ver 6.1. |
+| `resultados` (`PlatResultados01`) | Webhooks de leitura sobre `v_resultado`, geração do CSV e `INSERT` em `revisao`. |
 
 ### 6.1. `executar-tentativa`
 
-1. Marca `iniciado_em`. Monta `messages`: `[{role:"system", content}]` se houver *system prompt*.
-2. Para cada mensagem do ataque: acrescenta `{role:"user"}`, chama `POST {OLLAMA_BASE_URL}/api/chat` com:
+1. `api_proximo_passo` reconstrói `messages` a partir do *snapshot* do ataque e dos turnos já gravados: `[{role:"system", content}]` se houver *system prompt*, seguido das trocas anteriores. Devolve a ação `turno`, `verificar` ou `fim`.
+2. Para cada mensagem do ataque (laço de volta ao passo 1): acrescenta `{role:"user"}`, chama `POST {OLLAMA_BASE_URL}/api/chat` com:
    ```json
    {"model": "<modelo>", "messages": [...], "stream": false,
     "options": {<configuração>, "seed": <seed efetiva>}, "keep_alive": "10m"}
    ```
    Usa o nó HTTP Request com *timeout* = `timeout_chamada_s` (RF23). Grava o `turno` (entrada, resposta, metadados) e acrescenta `{role:"assistant"}` ao contexto (RF06).
 3. Erro ou *timeout* em qualquer turno: tentativa `falha` com `erro` preenchido, sem verificação. O fluxo **retorna normalmente**, e o loop segue (RF12, UC-03 6a).
-4. Sucesso: `POST http://verificador:8000/verificar` (seção 7) → grava `verificacao` → tentativa `concluida`, `finalizado_em`.
+4. Sucesso: `POST http://verificador:8000/verificar` (seção 7, *timeout* = `timeout_chamada_s` + 60 s) → grava `verificacao` → tentativa `concluida`, `finalizado_em`. Falha do verificador também vira `falha`.
 
 **Seed efetiva:** se a configuração tem `seed`, cada repetição usa `seed + (repeticao − 1)`. Assim as repetições variam, mas continuam reproduzíveis. O valor usado fica gravado em `tentativa.configuracao`.
 
@@ -385,11 +418,11 @@ Python 3.12, Typer e httpx, com versões fixadas em `cli/requirements.txt` e ins
 | `avaliacoes acompanhar <id>` | `GET /avaliacoes/:id` a cada 5 s até `finalizada` |
 | `resultados resumo <id>` | `GET /avaliacoes/:id/resumo` |
 | `resultados tentativas <id> [--veredito X] [--pagina N]` | `GET /avaliacoes/:id/tentativas` |
-| `resultados csv <id> [-o caminho]` | `GET /avaliacoes/:id/csv` (padrão `saida/avaliacao-<id>.csv`) |
+| `resultados csv <id> [-o caminho] [--separador virgula\|ponto-e-virgula]` | `GET /avaliacoes/:id/csv` (padrão `saida/avaliacao-<id>.csv`) |
 | `tentativas ver <id>` | `GET /tentativas/:id` (turnos, scores, juiz e revisões) |
 | `tentativas revisar <id> --veredito violacao\|sem_violacao [--comentario T]` | `POST /tentativas/:id/revisao` |
 
-**Saída.** Tabelas legíveis por padrão; avisos da API (por exemplo, modelo juiz entre os avaliados) sempre exibidos. `--json` em todos os comandos imprime o corpo da API sem alteração, para uso em scripts. Avaliações são criadas a partir de arquivo JSON no formato do §5.1; não há assistente interativo.
+**Saída.** Tabelas legíveis por padrão; avisos da API (por exemplo, modelo juiz entre os avaliados) sempre exibidos no stderr. `--json` em todos os comandos imprime o corpo da API sem alteração, para uso em scripts, com três particularidades: `avaliacoes executar --json` imprime o corpo do `202` e, se acompanhar, o corpo final de `GET /avaliacoes/:id` (um JSON por linha; o progresso vai para o stderr); `avaliacoes acompanhar --json` imprime só o corpo final; `resultados csv --json` grava o arquivo e imprime `{arquivo, bytes}`. Avaliações são criadas a partir de arquivo JSON no formato do §5.1; não há assistente interativo.
 
 **Acompanhamento.** `executar` acompanha o progresso por padrão (`concluidas`, `falhas`, `pendentes` de `n_planejado`). Ctrl+C encerra **só o acompanhamento**: a CLI avisa que a avaliação continua no servidor (RF12) e indica `avaliacoes acompanhar <id>`.
 
@@ -402,7 +435,7 @@ Python 3.12, Typer e httpx, com versões fixadas em `cli/requirements.txt` e ins
 | `2` | Uso incorreto do comando (argumentos, arquivo inexistente ou JSON malformado). |
 | `3` | API inacessível (`gateway` ou n8n fora do ar, workflow inativo). |
 
-**Testes.** `cli/tests/` com `pytest`, API simulada com `httpx.MockTransport`, sem rede. Cobrem cada comando, as respostas `400` e `409` e a falha de conexão.
+**Testes.** `cli/tests/` com `pytest`, API simulada com `httpx.MockTransport`, sem rede. Cobrem cada comando, as respostas `400`, `404` e `409`, a falha de conexão, o `gateway` sem n8n (`503`) e o workflow inativo (`404` do n8n), estes três com código `3`. A imagem define `PYTEST_ADDOPTS` para coletar só `/cli/tests`.
 
 ### 8.2. Interface Web
 
@@ -440,19 +473,23 @@ HTML + JavaScript puro (ES modules), sem build e sem dependências externas, ser
 ├── .env.example               # senhas, versões, OLLAMA_BASE_URL, N8N_ENCRYPTION_KEY
 ├── plataforma.ps1             # atalho da CLI (Windows)
 ├── plataforma.sh              # atalho da CLI (bash)
+├── scripts/configurar-n8n.*   # credencial, importação e ativação dos workflows
 ├── saida/                     # CSVs gravados pela CLI (no .gitignore)
 ├── db/init/
-│   ├── 01-databases.sql
+│   ├── 01-databases.sh
 │   ├── 02-schema.sql
-│   └── 03-seed-ataques.sql
+│   ├── 03-seed-ataques.sql
+│   └── 04-permissoes.sh
 ├── ataques/
 │   ├── schema.json
 │   └── predefinidos.json
+├── exemplos/                 # avaliação (§5.1) e ataques personalizados de exemplo
 ├── n8n/workflows/             # JSON exportados do n8n
 ├── verificador/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   ├── app/                   # main.py, similaridade.py, juiz.py
+│   ├── calibracao.py          # F8: precisão e recall por limiar
 │   └── tests/
 ├── cli/
 │   ├── Dockerfile
@@ -479,7 +516,7 @@ HTML + JavaScript puro (ES modules), sem build e sem dependências externas, ser
 | F5 Resultados | Workflow `resultados` | Resumo, lista, detalhe, CSV e revisão funcionam; revisão não altera `verificacao`. |
 | F6 CLI | Serviço `cli`, scripts `plataforma.ps1`/`plataforma.sh` e testes (seção 8.1) | Fluxo UC-01 → UC-04 completo pelo terminal; `pytest` da CLI cobre todos os comandos, `400`, `409` e API inacessível. |
 | F7 Interface Web | Páginas da seção 8.2 | Fluxo UC-01 → UC-04 completo pelo navegador; N exibido vem de `/avaliacoes/validar`. |
-| F8 Calibração | Conjunto rotulado de respostas (vazou / não vazou) | Limiares padrão escolhidos com base em precisão e *recall* medidos; valores registrados neste spec. |
+| F8 Calibração | Conjunto rotulado de respostas (vazou / não vazou) e `verificador/calibracao.py`, que lê CSVs exportados (rótulo = coluna `rotulo` manual ou `veredito_humano`) e mede precisão, *recall* e F1 por limiar | Limiares padrão escolhidos com base em precisão e *recall* medidos; valores registrados neste spec. |
 
 ---
 
@@ -506,10 +543,11 @@ Cada critério de caso de uso é verificado pelos dois clientes, a CLI e a Inter
 
 - **Escopo da verificação:** a comparação com o *system prompt* detecta apenas **vazamento do *system prompt***. Outros tipos de violação (por exemplo, descumprir uma regra sem revelá-la) não são detectados automaticamente e dependem de revisão humana.
 - **Sem *system prompt*:** essas tentativas recebem `nao_aplicavel` e só têm análise humana.
-- **Falsos positivos:** respostas legítimas que repetem termos do *system prompt* (nome do produto, tom de voz) podem elevar os scores. A calibração (F7) e o juiz mitigam isso.
+- **Falsos positivos:** respostas legítimas que repetem termos do *system prompt* (nome do produto, tom de voz) podem elevar os scores. A calibração (F8) e o juiz mitigam isso.
 - **Limiares:** os valores iniciais (0,6 TF-IDF e 0,8 *embeddings*) são estimativas e precisam de calibração.
 - **Desempenho (RNF02):** modelos grandes e N alto podem levar horas. O juiz só é acionado em caso de discordância, para reduzir o custo.
-- **Interrupção:** se o n8n cair durante a execução, a avaliação fica `em_execucao` com tentativas `pendente` e bloqueia novas execuções. A recuperação (manual na primeira versão) é voltar o status para `configurada` e reexecutar só as pendentes. Um endpoint de retomada fica como evolução futura.
+- **Interrupção:** se o n8n cair durante a execução, a avaliação fica `em_execucao` com tentativas `pendente` e bloqueia novas execuções. A recuperação (manual na primeira versão) é voltar o status para `configurada` (`UPDATE avaliacao SET status='configurada' WHERE id=...`) e reexecutar: as tentativas já existentes são mantidas, a que estava em andamento vira `falha` e só as pendentes são executadas. Um endpoint de retomada fica como evolução futura.
+- **Modelos do Ollama:** o `ollama pull` não aceita digest; uma tag (por exemplo, `llama3.2:1b`) pode ser republicada no registro. Os IDs testados ficam na seção 2.2 e devem ser conferidos com `ollama list` antes de comparar resultados entre instalações.
 - **API sem versão:** a API da Plataforma é um contrato único, e uma mudança incompatível quebra scripts do pesquisador. Versionar o caminho (por exemplo, `/api/v1`) fica como possibilidade futura, caso surjam clientes mantidos fora deste repositório.
 - **CLI só em contêiner:** cada comando sobe um contêiner (alguns segundos de latência) e exige o Docker ativo, que já é requisito da plataforma.
 - **Uso autorizado (RE01):** a ferramenta é ofensiva; o readme, a CLI (ajuda principal) e a Interface Web devem deixar isso explícito.
