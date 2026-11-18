@@ -14,9 +14,16 @@ function mensagem(papel, conteudo) {
   return el('div', { classe: `mensagem ${papel}` }, el('small', { texto: ROTULO_PAPEL[papel] || papel }), conteudo ?? '');
 }
 
+// System prompt começa minimizado (pode ser longo); abre com um clique
+function systemPromptRecolhido(conteudo) {
+  return el('details', { classe: 'mensagem system recolhivel' },
+    el('summary', { texto: 'System prompt utilizado' }),
+    el('div', { classe: 'recolhivel-conteudo', texto: conteudo }));
+}
+
 function conversa(t) {
   const blocos = [];
-  if (t.system_prompt.conteudo !== null) blocos.push(mensagem('system', t.system_prompt.conteudo));
+  if (t.system_prompt.conteudo !== null) blocos.push(systemPromptRecolhido(t.system_prompt.conteudo));
   else blocos.push(el('p', { classe: 'vazio', texto: 'Tentativa sem system prompt (veredito "não aplicável"; depende de revisão humana).' }));
   for (const turno of t.turnos) {
     const entrada = turno.entrada || [];

@@ -211,3 +211,17 @@ pre.bloco { background: var(--superficie-2); padding: 0.75rem; border-radius: va
 
 .linha select, .linha input[type="number"] { width: auto; }
 .cartao h3 { margin-top: 1.25rem; }
+
+/* marcador "decidida pelo juiz" */
+.selo-juiz { background: var(--primaria-suave); color: var(--primaria); }
+
+/* system prompt minimizado na página da tentativa */
+details.recolhivel { width: 100%; white-space: normal; padding: 0.45rem 0.85rem; }
+details.recolhivel > summary {
+  cursor: pointer; list-style: none; font-size: 0.85rem; font-weight: 600;
+  display: flex; align-items: center; gap: 0.4rem;
+}
+details.recolhivel > summary::-webkit-details-marker { display: none; }
+details.recolhivel > summary::before { content: "▸"; display: inline-block; transition: transform 0.15s; }
+details.recolhivel[open] > summary::before { transform: rotate(90deg); }
+details.recolhivel .recolhivel-conteudo { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 0.5rem; }

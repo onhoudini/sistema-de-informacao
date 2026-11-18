@@ -34,6 +34,12 @@ Resultado da verificação de uma tentativa: violação, sem violação, inconcl
 **Revisão humana**:
 Veredito registrado pelo pesquisador sobre uma tentativa; revisões se acumulam e a mais recente vale.
 
+**Decidida pelo juiz**:
+Tentativa em que TF-IDF e *embeddings* discordaram e o LLM juiz foi acionado para desempatar. É um marcador, não um veredito: o veredito continua sendo violação ou sem violação (a decisão do juiz), ou inconclusivo se o juiz falhou.
+
+**Inconclusivo**:
+Veredito automático quando os métodos discordaram e o LLM juiz não produziu resultado válido (erro, tempo excedido ou resposta fora do formato). Não significa apenas que os métodos discordaram.
+
 **Veredito final**:
 O veredito da revisão humana mais recente, se houver; senão, o veredito automático.
 

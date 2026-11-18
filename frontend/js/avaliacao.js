@@ -10,7 +10,16 @@ const principal = $('#conteudo');
 const id = parametro('id');
 
 const VEREDITOS = ['', 'violacao', 'sem_violacao', 'inconclusivo', 'nao_aplicavel', 'falha', 'pendente'];
-let filtro = { veredito: '', pagina: 1 };
+const JUIZ = 'decididas_juiz';
+let filtro = { veredito: '', pagina: 1, juiz: false };
+
+// Marcador "decidida pelo juiz": os métodos discordaram e o LLM juiz foi acionado
+function seloJuiz(t) {
+  if (!t.juiz_acionado) return '—';
+  return t.juiz_violacao === null
+    ? el('span', { classe: 'selo selo-inconclusivo', title: 'Juiz acionado sem resultado válido', texto: 'juiz falhou' })
+    : el('span', { classe: 'selo selo-juiz', title: 'Os métodos discordaram e o juiz desempatou', texto: 'juiz decidiu' });
+}
 let temporizador = null;
 let avaliacao = null;
 
@@ -91,12 +100,12 @@ function desenharConfig(av) {
 function celulasContagem(c) {
   return [
     String(c.tentativas), String(c.violacoes), String(c.sem_violacao), String(c.inconclusivas),
-    String(c.nao_aplicaveis), String(c.falhas),
+    String(c.nao_aplicaveis), String(c.falhas), String(c.decididas_juiz ?? 0),
     el('div', {}, el('strong', { texto: percentual(c.taxa_violacao) }),
       c.taxa_violacao !== null ? (() => { const b = barra(c.violacoes, c.violacoes + c.sem_violacao, 'Taxa de violação'); b.classList.add('violacao'); return b; })() : null),
   ];
 }
-const COLUNAS = ['Tent.', 'Violação', 'Sem violação', 'Inconcl.', 'N/A', 'Falhas', 'Taxa de violação'];
+const COLUNAS = ['Tent.', 'Violação', 'Sem violação', 'Inconcl.', 'N/A', 'Falhas', 'Juiz', 'Taxa de violação'];
 
 async function desenharResumo() {
   try {
@@ -104,10 +113,11 @@ async function desenharResumo() {
     const t = r.total || {};
     limpar(areaResumo,
       el('h2', { texto: 'Resumo dos resultados' }),
-      el('p', { classe: 'ajuda', texto: 'Taxa de violação = violações / (violações + sem violação), sobre o veredito final (inclui revisões humanas).' }),
+      el('p', { classe: 'ajuda', texto: 'Taxa de violação = violações / (violações + sem violação), sobre o veredito final (inclui revisões humanas). Decididas pelo juiz: TF-IDF e embeddings discordaram e o LLM juiz desempatou; inconclusivo = o juiz não conseguiu decidir.' }),
       el('div', { classe: 'metricas' },
         [['Violações', t.violacoes], ['Sem violação', t.sem_violacao], ['Inconclusivas', t.inconclusivas],
-          ['Não aplicáveis', t.nao_aplicaveis], ['Falhas', t.falhas], ['Taxa de violação', percentual(t.taxa_violacao)]]
+          ['Não aplicáveis', t.nao_aplicaveis], ['Falhas', t.falhas], ['Decididas pelo juiz', t.decididas_juiz],
+          ['Taxa de violação', percentual(t.taxa_violacao)]]
           .map(([rot, v]) => el('div', { classe: 'metrica' }, el('span', { texto: rot }), el('strong', { texto: String(v ?? 0) })))),
       el('h3', { texto: 'Por modelo × system prompt × estratégia' }),
       tabela(['Modelo', 'System prompt', 'Estratégia', ...COLUNAS],
@@ -123,9 +133,16 @@ async function desenharResumo() {
 // ---------- tentativas (RF16, RF19) ----------
 
 async function desenharTentativas() {
+  // "decididas pelo juiz" é um item da mesma lista; vira o parâmetro juiz=sim da API
+  const atual = filtro.juiz ? JUIZ : filtro.veredito;
   const seletor = el('select', { id: 'filtro-veredito' },
-    VEREDITOS.map((v) => el('option', { value: v, selected: v === filtro.veredito, texto: v ? rotulo(v) : 'Todos' })));
-  seletor.addEventListener('change', () => { filtro = { veredito: seletor.value, pagina: 1 }; desenharTentativas(); });
+    VEREDITOS.map((v) => el('option', { value: v, selected: v === atual, texto: v ? rotulo(v) : 'Todos' })),
+    el('option', { value: JUIZ, selected: atual === JUIZ, texto: 'decididas pelo juiz' }));
+  seletor.addEventListener('change', () => {
+    const juiz = seletor.value === JUIZ;
+    filtro = { veredito: juiz ? '' : seletor.value, juiz, pagina: 1 };
+    desenharTentativas();
+  });
   const cabecalho = el('div', { classe: 'linha' },
     el('h2', { texto: 'Tentativas' }), el('span', { classe: 'espaco' }),
     el('label', { for: 'filtro-veredito', classe: 'suave', texto: 'Veredito final:' }), seletor);
@@ -141,7 +158,7 @@ async function desenharTentativas() {
         r.itens.map((t) => [
           el('a', { href: `tentativa.html?id=${t.tentativa_id}`, texto: `#${t.tentativa_id}` }),
           t.modelo, t.system_prompt, String(t.configuracao_idx), t.ataque, String(t.repeticao),
-          numero(t.tfidf_score), numero(t.embedding_score), t.juiz_acionado ? 'sim' : '—',
+          numero(t.tfidf_score), numero(t.embedding_score), seloJuiz(t),
           el('span', {}, selo(t.veredito_final || (t.status === 'concluida' ? null : t.status)),
             t.veredito_humano ? el('span', { classe: 'suave', texto: ' revisado' }) : null),
         ]), { vazio: 'Nenhuma tentativa com este filtro.' }),

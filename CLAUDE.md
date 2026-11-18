@@ -75,6 +75,9 @@ docker compose --profile cli run --rm --entrypoint pytest cli
 docker compose run --rm verificador pytest
 #   ou localmente: cd verificador && pytest
 
+# aplicar uma migração num banco existente (db/init/ só roda com volume novo)
+Get-Content db/migracoes/001-juiz-acionado.sql | docker compose exec -T postgres psql -U postgres -d plataforma
+
 # inspecionar o banco da aplicação
 docker compose exec postgres psql -U plataforma_app -d plataforma
 ```

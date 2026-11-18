@@ -67,8 +67,10 @@ export const executarAvaliacao = (id) => requisitar('POST', `/avaliacoes/${encod
 
 // Resultados (UC-04)
 export const resumo = (id) => requisitar('GET', `/avaliacoes/${encodeURIComponent(id)}/resumo`);
-export const tentativas = (id, { veredito, pagina } = {}) =>
-  requisitar('GET', `/avaliacoes/${encodeURIComponent(id)}/tentativas`, { params: { veredito, pagina } });
+export const tentativas = (id, { veredito, pagina, juiz } = {}) =>
+  requisitar('GET', `/avaliacoes/${encodeURIComponent(id)}/tentativas`, {
+    params: { veredito, pagina, juiz: juiz ? 'sim' : undefined },
+  });
 export const urlCsv = (id, separador = ',') =>
   `/api/avaliacoes/${encodeURIComponent(id)}/csv${separador === ';' ? '?separador=%3B' : ''}`;
 export const verTentativa = (id) => requisitar('GET', `/tentativas/${encodeURIComponent(id)}`);

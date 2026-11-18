@@ -102,10 +102,12 @@ class ClienteAPI:
     def resumo(self, id_: int) -> Any:
         return self._json("GET", f"/avaliacoes/{id_}/resumo")
 
-    def tentativas(self, id_: int, veredito: Optional[str] = None, pagina: int = 1) -> Any:
+    def tentativas(self, id_: int, veredito: Optional[str] = None, pagina: int = 1, juiz: bool = False) -> Any:
         params: dict[str, Any] = {"pagina": pagina}
         if veredito:
             params["veredito"] = veredito
+        if juiz:
+            params["juiz"] = "sim"
         return self._json("GET", f"/avaliacoes/{id_}/tentativas", params=params)
 
     def csv(self, id_: int, separador: str = ",") -> bytes:

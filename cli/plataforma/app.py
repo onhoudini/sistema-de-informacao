@@ -354,10 +354,18 @@ def avaliacoes_acompanhar(id_: Annotated[int, typer.Argument(metavar="ID")], com
 
 def _linhas_contagem(itens: list[dict], chaves: list[str]) -> list[list[Any]]:
     return [[*(i.get(k) for k in chaves), i["tentativas"], i["violacoes"], i["sem_violacao"], i["inconclusivas"],
-             i["nao_aplicaveis"], i["falhas"], i["pendentes"], fmt.percentual(i.get("taxa_violacao"))] for i in itens]
+             i["nao_aplicaveis"], i["falhas"], i["pendentes"], i.get("decididas_juiz", 0),
+             fmt.percentual(i.get("taxa_violacao"))] for i in itens]
 
 
-CABECALHO_CONTAGEM = ["TENT.", "VIOL.", "SEM VIOL.", "INCONCL.", "N/A", "FALHAS", "PEND.", "TAXA VIOL."]
+CABECALHO_CONTAGEM = ["TENT.", "VIOL.", "SEM VIOL.", "INCONCL.", "N/A", "FALHAS", "PEND.", "JUIZ", "TAXA VIOL."]
+
+
+def situacao_juiz(t: dict) -> str:
+    """'decidido' = o LLM juiz desempatou; 'falhou' = acionado sem resultado válido (inconclusivo)."""
+    if not t.get("juiz_acionado"):
+        return "-"
+    return "falhou" if t.get("juiz_violacao") is None else "decidido"
 
 
 @resultados_app.command("resumo")
@@ -368,7 +376,9 @@ def resultados_resumo(id_: Annotated[int, typer.Argument(metavar="ID")], como_js
         return imprimir_json(r)
     av = r.get("avaliacao", {})
     eco(linha_progresso(av))
-    eco("Taxa de violação = violações / (violações + sem violação), sobre o veredito final.\n")
+    eco("Taxa de violação = violações / (violações + sem violação), sobre o veredito final.")
+    eco("JUIZ = tentativas em que TF-IDF e embeddings discordaram e o LLM juiz desempatou "
+        "(inconclusivo = o juiz não conseguiu decidir).\n")
     total = r.get("total") or {}
     if total:
         eco(fmt.tabela(CABECALHO_CONTAGEM, _linhas_contagem([total], [])))
@@ -387,17 +397,18 @@ def resultados_tentativas(
     id_: Annotated[int, typer.Argument(metavar="ID")],
     veredito: Annotated[Optional[str], typer.Option(help="violacao, sem_violacao, inconclusivo, nao_aplicavel, falha ou pendente.")] = None,
     pagina: Annotated[int, typer.Option(help="Página (50 por página).")] = 1,
+    juiz: Annotated[bool, typer.Option("--juiz", help="Só as tentativas em que o LLM juiz foi acionado (métodos discordaram).")] = False,
     como_json: OpcaoJson = False,
 ) -> None:
     """Lista paginada das tentativas com o veredito final (RF16, RF19)."""
-    r = chamar(lambda c: c.tentativas(id_, veredito, pagina), como_json)
+    r = chamar(lambda c: c.tentativas(id_, veredito, pagina, juiz), como_json)
     if como_json:
         return imprimir_json(r)
     itens = r.get("itens", [])
     eco(fmt.tabela(
         ["ID", "MODELO", "SYSTEM PROMPT", "CONF", "ATAQUE", "REP", "STATUS", "TF-IDF", "EMB.", "JUIZ", "VEREDITO FINAL"],
         [[t["tentativa_id"], t["modelo"], t["system_prompt"], t["configuracao_idx"], t["ataque"], t["repeticao"],
-          t["status"], t.get("tfidf_score"), t.get("embedding_score"), t.get("juiz_acionado"),
+          t["status"], t.get("tfidf_score"), t.get("embedding_score"), situacao_juiz(t),
           fmt.veredito(t.get("veredito_final") or (t["status"] if t["status"] != "concluida" else None))
           + (" (revisado)" if t.get("veredito_humano") else "")] for t in itens],
         larguras={2: 24, 4: 32},
@@ -435,7 +446,11 @@ def resultados_csv(
 
 
 @tentativas_app.command("ver")
-def tentativas_ver(id_: Annotated[int, typer.Argument(metavar="ID")], como_json: OpcaoJson = False) -> None:
+def tentativas_ver(
+    id_: Annotated[int, typer.Argument(metavar="ID")],
+    completo: Annotated[bool, typer.Option("--completo", help="Mostra o system prompt inteiro (por padrão ele fica minimizado).")] = False,
+    como_json: OpcaoJson = False,
+) -> None:
     """Evidências de uma tentativa: turnos, scores, juiz e revisões (RF16)."""
     t = chamar(lambda c: c.ver_tentativa(id_), como_json)
     if como_json:
@@ -451,8 +466,13 @@ def tentativas_ver(id_: Annotated[int, typer.Argument(metavar="ID")], como_json:
         ("Veredito humano", fmt.veredito(t.get("veredito_humano"))),
         ("Veredito final", fmt.veredito(t.get("veredito_final"))),
     ]))
-    eco("\nSystem prompt:")
-    eco(sp.get("conteudo") if sp.get("conteudo") is not None else "(sem system prompt)")
+    if sp.get("conteudo") is None:
+        eco("\nSystem prompt: (sem system prompt)")
+    elif completo:
+        eco("\nSystem prompt utilizado:")
+        eco(sp["conteudo"])
+    else:
+        eco("\nSystem prompt utilizado: (minimizado; use --completo para mostrar)")
     for turno in t.get("turnos", []):
         entrada = turno.get("entrada") or []
         pergunta = entrada[-1].get("content") if entrada else ""

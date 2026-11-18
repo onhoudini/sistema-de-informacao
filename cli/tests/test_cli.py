@@ -25,7 +25,7 @@ AVALIACAO = {"id": 3, "nome": "baseline", "status": "configurada", "modelos": ["
              "n_planejado": 2, "concluidas": 0, "falhas": 0, "pendentes": 2,
              "criado_em": "2026-11-18T10:00:00Z", "iniciado_em": None, "finalizado_em": None}
 CONTAGEM = {"tentativas": 2, "violacoes": 1, "sem_violacao": 0, "inconclusivas": 0, "nao_aplicaveis": 1,
-            "falhas": 0, "pendentes": 0, "revisadas": 0, "taxa_violacao": 1.0}
+            "falhas": 0, "pendentes": 0, "revisadas": 0, "decididas_juiz": 1, "taxa_violacao": 1.0}
 TENTATIVA = {"tentativa_id": 10, "avaliacao_id": 3, "modelo": "llama3.2:1b",
              "system_prompt": {"id": 1, "rotulo": "banco", "conteudo": "Você é..."},
              "configuracao_idx": 0, "configuracao": {"seed": 42}, "ataque": ATAQUE, "repeticao": 1,
@@ -276,6 +276,35 @@ def test_resultados_tentativas_com_filtro(api):
     assert params["veredito"] == "violacao" and params["pagina"] == "2"
 
 
+def test_resultados_resumo_mostra_decididas_pelo_juiz(api):
+    api.em("GET", "/api/avaliacoes/3/resumo", 200, {
+        "avaliacao": dict(AVALIACAO, status="finalizada"), "total": dict(CONTAGEM, decididas_juiz=7),
+        "por_modelo": [], "grupos": [], "por_ataque": []})
+    r = rodar("resultados", "resumo", "3")
+    assert r.exit_code == 0 and "JUIZ" in r.stdout and " 7 " in r.stdout
+    assert "desempatou" in r.stdout
+
+
+def test_resultados_tentativas_filtro_juiz(api):
+    api.em("GET", "/api/avaliacoes/3/tentativas", 200, {"pagina": 1, "por_pagina": 50, "total": 2, "itens": [
+        {"tentativa_id": 11, "modelo": "m", "system_prompt": "s", "configuracao_idx": 0, "ataque": "a",
+         "repeticao": 1, "status": "concluida", "juiz_acionado": True, "juiz_violacao": True,
+         "veredito_final": "violacao"},
+        {"tentativa_id": 12, "modelo": "m", "system_prompt": "s", "configuracao_idx": 0, "ataque": "a",
+         "repeticao": 1, "status": "concluida", "juiz_acionado": True, "juiz_violacao": None,
+         "veredito_final": "inconclusivo"}]})
+    r = rodar("resultados", "tentativas", "3", "--juiz")
+    assert r.exit_code == 0
+    assert api.requisicoes[0].url.params["juiz"] == "sim"
+    assert "decidido" in r.stdout and "falhou" in r.stdout
+
+
+def test_resultados_tentativas_sem_juiz_nao_envia_parametro(api):
+    api.em("GET", "/api/avaliacoes/3/tentativas", 200, {"pagina": 1, "por_pagina": 50, "total": 0, "itens": []})
+    assert rodar("resultados", "tentativas", "3").exit_code == 0
+    assert "juiz" not in api.requisicoes[0].url.params
+
+
 def test_resultados_tentativas_400(api):
     api.em("GET", "/api/avaliacoes/3/tentativas", 400, {"erros": ["veredito: use um de ..."]})
     assert rodar("resultados", "tentativas", "3", "--veredito", "x").exit_code == 1
@@ -311,6 +340,35 @@ def test_tentativas_ver(api):
     r = rodar("tentativas", "ver", "10")
     assert r.exit_code == 0
     assert "--- Turno 1 ---" in r.stdout and "[resposta] Você é..." in r.stdout and "TF-IDF" in r.stdout
+
+
+def test_tentativas_ver_minimiza_system_prompt(api):
+    api.em("GET", "/api/tentativas/10", 200,
+           dict(TENTATIVA, system_prompt={"id": 1, "rotulo": "banco", "conteudo": "SEGREDO-LONGO-DO-PROMPT"}))
+    r = rodar("tentativas", "ver", "10")
+    assert r.exit_code == 0
+    assert "SEGREDO-LONGO-DO-PROMPT" not in r.stdout
+    assert "System prompt utilizado: (minimizado; use --completo para mostrar)" in r.stdout
+
+
+def test_tentativas_ver_completo_mostra_system_prompt(api):
+    api.em("GET", "/api/tentativas/10", 200,
+           dict(TENTATIVA, system_prompt={"id": 1, "rotulo": "banco", "conteudo": "SEGREDO-LONGO-DO-PROMPT"}))
+    r = rodar("tentativas", "ver", "10", "--completo")
+    assert r.exit_code == 0 and "SEGREDO-LONGO-DO-PROMPT" in r.stdout and "minimizado" not in r.stdout
+
+
+def test_tentativas_ver_json_traz_corpo_completo(api):
+    corpo = dict(TENTATIVA, system_prompt={"id": 1, "rotulo": "banco", "conteudo": "SEGREDO-LONGO-DO-PROMPT"})
+    api.em("GET", "/api/tentativas/10", 200, corpo)
+    r = rodar("tentativas", "ver", "10", "--json")
+    assert r.exit_code == 0 and json.loads(r.stdout)["system_prompt"]["conteudo"] == "SEGREDO-LONGO-DO-PROMPT"
+
+
+def test_tentativas_ver_sem_system_prompt(api):
+    api.em("GET", "/api/tentativas/10", 200, dict(TENTATIVA, system_prompt={"id": 2, "rotulo": "sem", "conteudo": None}))
+    r = rodar("tentativas", "ver", "10")
+    assert r.exit_code == 0 and "(sem system prompt)" in r.stdout
 
 
 def test_tentativas_revisar(api):

@@ -90,6 +90,8 @@ Para atualizar um pacote Python: mudar `requirements.txt`, reconstruir a imagem,
 
 Scripts em `db/init/`, executados em ordem pelo `docker-entrypoint-initdb.d` do Postgres na primeira inicialização do volume: `01-databases.sh` (databases `n8n` e `plataforma` e seus usuários, com senhas do `.env`), `02-schema.sql` (tabelas, view, *triggers* e funções de acesso), `03-seed-ataques.sql` (coleção predefinida) e `04-permissoes.sh` (permissões de `plataforma_app`).
 
+Os scripts de `db/init/` só rodam com um volume novo. Mudanças em um banco já existente (por exemplo, nova versão de uma função `api_*`) vão também em `db/migracoes/NNN-descricao.sql`, idempotente e sem alterar dados, aplicada com `Get-Content db/migracoes/NNN-descricao.sql | docker compose exec -T postgres psql -U postgres -d plataforma`. O `02-schema.sql` é mantido sempre igual ao resultado de todas as migrações.
+
 ```sql
 CREATE TABLE ataque (
   id            SERIAL PRIMARY KEY,
@@ -244,7 +246,7 @@ Convenções: corpos de `POST` exigem `Content-Type: application/json`; erros de
 | `GET /avaliacoes/:id` | `avaliacoes` | Configuração completa e progresso (`n_planejado`, `concluidas`, `falhas`, `pendentes`). | UC-02, UC-03 |
 | `POST /avaliacoes/:id/executar` | `executar-avaliacao` | Inicia a execução. `202` imediato; `409` se já houver outra em execução ou se a avaliação não estiver `configurada`; `404` se não existir. | RF10–RF12, UC-03 |
 | `GET /avaliacoes/:id/resumo` | `resultados` | Agregados por modelo, *system prompt* e estratégia. | RF21, RF22 |
-| `GET /avaliacoes/:id/tentativas` | `resultados` | Lista paginada (50 por página) de tentativas com veredito final (`?veredito=&pagina=`; `veredito` aceita os quatro vereditos, `falha` e `pendente`). | RF16, RF19 |
+| `GET /avaliacoes/:id/tentativas` | `resultados` | Lista paginada (50 por página) de tentativas com veredito final (`?veredito=&pagina=&juiz=`; `veredito` aceita os quatro vereditos, `falha` e `pendente`; `juiz=sim` traz só as tentativas em que o LLM juiz foi acionado). Cada item traz `juiz_acionado` e `juiz_violacao` (nulo quando o juiz falhou). | RF16, RF19 |
 | `GET /avaliacoes/:id/csv` | `resultados` | Histórico em CSV (`text/csv`, UTF-8 com BOM). `?separador=;` gera ponto e vírgula, que o Excel em português abre direto. | RF20 |
 | `GET /tentativas/:id` | `resultados` | Detalhe: turnos (entradas e respostas), verificação e revisões. | RF16, RF17 |
 | `POST /tentativas/:id/revisao` | `resultados` | Registra revisão humana `{veredito, comentario}`. | RF17, RF18, RN-13 |
@@ -417,9 +419,9 @@ Python 3.12, Typer e httpx, com versões fixadas em `cli/requirements.txt` e ins
 | `avaliacoes executar <id> [--sem-acompanhar]` | `POST /avaliacoes/:id/executar`, depois acompanha |
 | `avaliacoes acompanhar <id>` | `GET /avaliacoes/:id` a cada 5 s até `finalizada` |
 | `resultados resumo <id>` | `GET /avaliacoes/:id/resumo` |
-| `resultados tentativas <id> [--veredito X] [--pagina N]` | `GET /avaliacoes/:id/tentativas` |
+| `resultados tentativas <id> [--veredito X] [--pagina N] [--juiz]` | `GET /avaliacoes/:id/tentativas` |
 | `resultados csv <id> [-o caminho] [--separador virgula\|ponto-e-virgula]` | `GET /avaliacoes/:id/csv` (padrão `saida/avaliacao-<id>.csv`) |
-| `tentativas ver <id>` | `GET /tentativas/:id` (turnos, scores, juiz e revisões) |
+| `tentativas ver <id> [--completo]` | `GET /tentativas/:id` (turnos, scores, juiz e revisões) |
 | `tentativas revisar <id> --veredito violacao\|sem_violacao [--comentario T]` | `POST /tentativas/:id/revisao` |
 
 **Saída.** Tabelas legíveis por padrão; avisos da API (por exemplo, modelo juiz entre os avaliados) sempre exibidos no stderr. `--json` em todos os comandos imprime o corpo da API sem alteração, para uso em scripts, com três particularidades: `avaliacoes executar --json` imprime o corpo do `202` e, se acompanhar, o corpo final de `GET /avaliacoes/:id` (um JSON por linha; o progresso vai para o stderr); `avaliacoes acompanhar --json` imprime só o corpo final; `resultados csv --json` grava o arquivo e imprime `{arquivo, bytes}`. Avaliações são criadas a partir de arquivo JSON no formato do §5.1; não há assistente interativo.
@@ -447,13 +449,13 @@ HTML + JavaScript puro (ES modules), sem build e sem dependências externas, ser
 | `ataques.html` | Biblioteca agrupada por estratégia; área para colar ou enviar o JSON de ataques personalizados, com erros de validação. | UC-01 |
 | `nova-avaliacao.html` | Formulário: modelos (de `/api/modelos`), *system prompts* (com opção "sem *system prompt*"), configurações (uma ou mais), ataques, repetições, tempo máximo por chamada, limiares e modelo juiz. Mostra N, erros e avisos em tempo real consultando `POST /api/avaliacoes/validar` (com *debounce*) e um resumo antes de salvar; nenhum cálculo de regra no navegador. | UC-02 |
 | `avaliacao.html?id=` | Botão Executar; progresso por *polling* (5 s) enquanto `em_execucao`; ao finalizar, resumo (taxa de violação por modelo × *system prompt* × estratégia), lista de tentativas com filtros por veredito e download do CSV. | UC-03, UC-04 |
-| `tentativa.html?id=` | Evidências turno a turno, scores dos métodos, decisão do juiz, histórico de revisões e formulário de revisão. | UC-04 |
+| `tentativa.html?id=` | Evidências turno a turno (o *system prompt* começa recolhido, com controle para expandir; na CLI, `tentativas ver` o minimiza e `--completo` o mostra), scores dos métodos, decisão do juiz, histórico de revisões e formulário de revisão. | UC-04 |
 
 ---
 
 ## 9. Relatórios e CSV (RF19 a RF22)
 
-**Resumo:** para cada (modelo, *system prompt*, estratégia), conta tentativas, violações, sem violação, inconclusivas, não aplicáveis e falhas, além da taxa de violação = violações / (tentativas concluídas com veredito `violacao` ou `sem_violacao`). Usa sempre o `veredito_final`.
+**Resumo:** para cada (modelo, *system prompt*, estratégia), conta tentativas, violações, sem violação, inconclusivas, não aplicáveis e falhas, além da taxa de violação = violações / (tentativas concluídas com veredito `violacao` ou `sem_violacao`). Usa sempre o `veredito_final`. Conta também `decididas_juiz`: tentativas em que TF-IDF e *embeddings* discordaram e o LLM juiz foi acionado (com veredito válido ou não). É um marcador independente do veredito: a tentativa continua contada como violação, sem violação ou inconclusiva (esta só quando o juiz falha).
 
 **Colunas do CSV:** `avaliacao_id, tentativa_id, modelo, system_prompt, configuracao, ataque, estrategia, tipo, repeticao, status, erro, entradas, respostas, tfidf_score, tfidf_violacao, embedding_score, embedding_violacao, concordam, juiz_acionado, juiz_violacao, juiz_justificativa, veredito_automatico, veredito_humano, veredito_final, iniciado_em, finalizado_em`. Campos com várias partes (turnos) são serializados em JSON.
 
